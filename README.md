@@ -67,8 +67,8 @@ The notebook runs end-to-end from a clean clone with no manual steps.
 | Model | Brier | Log Loss | ROC-AUC |
 |-------|-------|----------|---------|
 | Grid-rule reference (bare minimum) | 0.2080 | — | — |
-| **Heuristic (qpos buckets)** | **0.1699** | 0.5233 | 0.8227 |
-| **LR + Platt Calibration** | **0.1735** | 0.5228 | 0.8680 |
+| **Heuristic (grid_position buckets)** | **0.1606** | 0.4976 | 0.8173 |
+| **LR + Platt Calibration** | **0.1396** | 0.4436 | 0.8766 |
 | Docent model (target to beat) | 0.1320 | — | 0.8920 |
 
-Both baselines beat the grid-rule floor (Brier 0.208). Gap to docent model (0.132) is the target for Hito 2 experiments.
+Both baselines beat the grid-rule floor (Brier 0.208). LR+Platt is close to the docent target (0.132). Gap will be closed by Hito 2 experiments (RF + XGBoost + compound encoding).

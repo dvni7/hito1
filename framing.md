@@ -36,14 +36,16 @@ We optimise for Brier score because:
 
 **Heuristic baseline — F1-defendable rationale:**
 
-> P(top10) = 0.85 if `qualifying_position` ≤ 5
-> P(top10) = 0.50 if 5 < `qualifying_position` ≤ 10
-> P(top10) = 0.12 if `qualifying_position` > 10
+> P(top10) = 0.87 if `grid_position` ≤ 5
+> P(top10) = 0.68 if 5 < `grid_position` ≤ 10
+> P(top10) = 0.25 if `grid_position` > 10
 
-*Rationale:* In F1, drivers who qualify inside the top 5 nearly always have the pace to score points unless they suffer a mechanical failure or collision. Positions 6–10 on the grid are within the points zone but face overtaking pressure. Beyond P10, scoring requires significant attrition. These thresholds are grounded in F1 domain knowledge and validated against 2019–2021 base rates, not test data.
+*Rationale:* In F1, drivers starting in the top 5 nearly always have the pace to score points unless they suffer a mechanical failure or collision. Positions 6–10 are within the points zone but face overtaking pressure. Beyond P10, scoring requires significant attrition. Thresholds are grounded in F1 domain knowledge and validated against 2019–2021 base rates (actual: 0.874 / 0.679 / 0.254), not test data.
+
+Note: `qualifying_position == grid_position` in 100% of rows in this dataset (no grid penalties recorded), so both columns are interchangeable. We use `grid_position` as the canonical name.
 
 **Simple model baseline:**
-Logistic regression with two features: `qualifying_position` (continuous) and `constructor_tier` (ordinal-encoded: top=2, mid=1, back=0). Trained on 2019–2021, calibrated with Platt scaling on 2022.
+Logistic regression with three features: `grid_position` (continuous), `constructor_tier` (ordinal-encoded: front=2, midfield=1, backmarker=0), and `n_stops` (SCENARIO INPUT — declared explicitly in leakage audit; engineer sets this value to ask "what-if"). Trained on 2019–2021, calibrated with Platt scaling on 2022.
 
 Both baselines are evaluated on the 2023–2024 test set with Brier score, log loss, and calibration curve.
 
@@ -53,21 +55,19 @@ Both baselines are evaluated on the 2023–2024 test set with Brier score, log l
 
 The model is a **scenario comparison tool**: the engineer fixes pre-race context (driver, circuit, grid position) and varies strategy inputs (`n_stops`, `compound_sequence`) to compare P(top10) across scenarios.
 
-**Scenario A — Monaco 2024, underdog strategy:**
-- Driver: Norris (McLaren, `constructor_tier=mid`)
-- `qualifying_position` = 4, `grid_position` = 4
-- Scenario A1: `n_stops=1`, `compound_sequence=M-H` → expected P(top10) ~0.82
-- Scenario A2: `n_stops=2`, `compound_sequence=S-M-H` → expected P(top10) ~0.75
-- **Engineer question:** Does a two-stop undercut justify the extra risk of a slower second stint?
+**Scenario A — Monaco 2024, Norris (McLaren):**
+- `grid_position` = 4, `constructor_tier` = **front** (McLaren was front-tier at Monaco 2024 per dataset)
+- Scenario A1: `n_stops=1`, `compound_sequence=M-H` → see notebook for P(top10)
+- Scenario A2: `n_stops=2`, `compound_sequence=S-M-H` → see notebook for P(top10)
+- **Engineer question:** Does a two-stop undercut justify the track-position risk at Monaco, where overtaking is nearly impossible?
 
-**Scenario B — Monza 2023, midfield battle:**
-- Driver: Russell (Mercedes, `constructor_tier=mid` in 2023)
-- `qualifying_position` = 7, `grid_position` = 7
-- Scenario B1: `n_stops=1`, `compound_sequence=H-M`, `safety_car_periods=0` → expected P(top10) ~0.52
-- Scenario B2: `n_stops=2`, `compound_sequence=S-H-M`, `safety_car_periods=1` → expected P(top10) ~0.61
-- **Engineer question:** If a safety car is likely (Monza historically SC-prone), does a two-stop become favourable?
+**Scenario B — Monza 2023, Russell (Mercedes):**
+- `grid_position` = 8, `constructor_tier` = **midfield** (Mercedes was midfield-tier at Italian GP 2023 per dataset)
+- Scenario B1: `n_stops=1`, `compound_sequence=H-M` → see notebook for P(top10)
+- Scenario B2: `n_stops=2`, `compound_sequence=S-H-M` → see notebook for P(top10)
+- **Engineer question:** At a DRS-heavy circuit where overtaking is easier, does a two-stop allow for a faster final stint to recover positions?
 
-These scenarios use concrete feature values; results will be populated after the model is fitted in Hito 2.
+These scenarios use concrete, dataset-verified feature values. Results are computed in `hito1_baseline.ipynb` §9 and will be extended in Hito 2 with compound_sequence as an additional encoded scenario input.
 
 ---
 
@@ -75,17 +75,20 @@ These scenarios use concrete feature values; results will be populated after the
 
 We acknowledge the following limitations from the five known issues, and their consequences for our recommendations:
 
-**Limitation 1 — `qualifying_position` is a stand-in for `grid_position`; `qualifying_time_s` is empty.**
-Consequence: grid penalties (engine changes, DSQ) mean qualifying position ≠ race grid position for ~8–12% of entries per season. Our baseline treats them as equivalent, which will slightly inflate P(top10) estimates for drivers who took grid penalties and started further back than their qualifying suggests. We do not build any story around qualifying lap time.
+**Limitation 1 — `qualifying_time_s` is entirely NULL; `qualifying_position == grid_position` for all rows.**
+In this dataset, no grid penalties are recorded — qualifying_position and grid_position are identical for all 2,447 entries. This means the dataset cannot capture the ~8–12% of race weekends where engine changes or DSQs cause a grid-position shift. We use `grid_position` as the canonical feature name and do not build any story around qualifying lap time.
 
 **Limitation 2 — Strategy features are post-race observations used as scenario inputs.**
 `n_stops`, `compound_sequence`, and `stint_lengths` are not known before the race. In this capstone they are *intentionally* injected as user-controlled scenario inputs — the model is a "what-if" comparator, not a pre-race predictor. We declare this distinction explicitly: any model that treats these as pre-race signals would be a target-leakage error in any other context. All scenario-input features must be set by the engineer, not predicted.
 
-**Limitation 3 — `safety_car_periods` is a binary indicator (not a count).**
-Consequence: two SC periods and one SC period are indistinguishable. This limits the model's ability to differentiate high-chaos races. We treat it as a stress-test audit slice, not a core predictor.
+**Limitation 3 — `safety_car_periods` is all zero in this dataset version.**
+The column exists but contains no positive values across all 2,447 rows and all six seasons. This is a known data-recovery limitation: SC intervals were not successfully joined to this race-level artifact. Consequence: we cannot use safety car as a predictor or stress-test slice on this dataset. We use `weather_actual` (dry/wet) as the available audit slice instead. A future version of the dataset should incorporate SC data from the lap-level file.
 
-**Limitation 4 — Coverage starts in 2019.**
-Six seasons is a modest sample. Regulatory changes (2022 ground-effect reset) may create non-stationarity that the temporal split partially captures but cannot eliminate.
+**Limitation 4 — Strategy choice is not independent of car pace, driver, weather, and race incidents.**
+A team that chooses a 2-stop strategy may do so because their car degrades faster — meaning `n_stops` is confounded with underlying pace. The what-if tool should be interpreted as "holding pace constant, what is the effect of strategy?", not as a causal estimate.
+
+**Limitation 5 — Coverage starts in 2019.**
+Six seasons is a modest sample. The 2022 ground-effect regulation reset may create non-stationarity that the temporal split partially captures but cannot eliminate.
 
 ---
 
@@ -93,8 +96,8 @@ Six seasons is a modest sample. Regulatory changes (2022 ground-effect reset) ma
 
 | # | Experiment | Hypothesis | Primary metric target |
 |---|-----------|-----------|----------------------|
-| **E1** | Random Forest with pre-race features (`qualifying_position`, `constructor_tier`, `qualifying_gap_to_pole_sec`, `driver_experience_races`, `driver_recent_dnf_rate`) | RF will better capture non-linear interactions (e.g., top constructor × front-row start) than logistic regression; expected Brier < 0.160 | Brier ≤ 0.160 |
-| **E2** | Gradient Boosting (XGBoost) adding scenario inputs (`n_stops`, `compound_sequence_encoded`, `safety_car_periods`) | Explicitly modelling strategy choices will widen the P(top10) gap between 1-stop and 2-stop scenarios, making the what-if tool more actionable | Brier ≤ 0.140; scenario delta ≥ 0.08 |
+| **E1** | Random Forest with pre-race features (`grid_position`, `constructor_tier`, `driver_prior3_avg_finish`, `constructor_prior3_avg_finish`, `driver_circuit_prior_avg`) | RF will better capture non-linear interactions (e.g., front constructor × front-row start) than logistic regression; expected Brier < 0.160 | Brier ≤ 0.160 |
+| **E2** | Gradient Boosting (XGBoost) adding encoded scenario inputs (`n_stops`, `compound_sequence` one-hot encoded, `weather_actual`) | Explicitly modelling strategy choices will widen the P(top10) gap between 1-stop and 2-stop scenarios, making the what-if tool more actionable | Brier ≤ 0.140; scenario delta ≥ 0.08 |
 | **E3** | Calibration method comparison — Platt scaling vs. isotonic regression (both trained on 2022 only) | Isotonic regression will produce a better-calibrated curve for the RF/XGB models because the score distributions are non-monotonic; Platt will suffice for logistic regression | Expected Calibration Error ≤ 0.05 |
 
 All experiments follow the locked temporal split and use only 2022 calibration data for calibration fitting.
